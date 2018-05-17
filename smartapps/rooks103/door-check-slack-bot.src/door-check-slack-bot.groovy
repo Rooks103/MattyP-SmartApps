@@ -1,7 +1,9 @@
 /**
- *  SmartApp for being able to monitor any sensors with contact sensors. If they are open after 
- *  a certain time, we will start to send slack messages to the given channel informing people to
- *  actually close the doors, gradually escalating to @here messages or even @channel messages
+ *  SmartApp for being able to monitor any contact sensors and if open, send a normal, @here, and 
+ *  @channel message once per day to remind people to close them. Intended use casewould to be have them 
+ *  be setup in an escalating manner to ensure doors are closed at the end of a day. 
+ *  Additionally, the app will check every 2 minutes to determine if the doors have been closed, and if so, 
+ *  send a normal message back to Slack to notify people that the doors were closed.
  *
  *  Author: Matt Peterson
  */
@@ -52,14 +54,14 @@ def updated() {
 
 def initialize() {
     state.wereDoorsOpenPreviously = false
-    schedule("0 0/2 * ? * MON-FRI", handlerMethod)
+    schedule("0 0/2 * ? * MON-FRI", openDoorCheckMethod)
     schedule(normalTime, normalSenderMethod)
     schedule(hereTime, hereSenderMethod)
     schedule(channelTime, channelSenderMethod)
 }
 
-private Map slackMsgBuilder(message, openDoors) {
-	log.debug "Entering slack message builder."
+private Map slackMsgBuilder(message) {
+    log.debug "Entering slack message builder."
     Map slackParams = [
         uri: "https://$slackURI/api/chat.postMessage",
         headers: [
@@ -76,7 +78,7 @@ private Map slackMsgBuilder(message, openDoors) {
 }
 
 private Map messagePicker(msgType, openDoors) {
-	log.debug "Entering message picker."
+    log.debug "Entering message picker."
     Random rand = new Random()
     String[] openQuotes = ["Hey! My sensors indicate open doors. One of you meatbags go close them. I'm busy doing nothing.",
               "For real. Someone go close the doors. The draft from them is messing with my cigars.",
@@ -99,7 +101,7 @@ private Map messagePicker(msgType, openDoors) {
     } else if (msgType == "closed") {
         quote = closeQuotes[rand.nextInt(closeQuotes.length)]
     }
-    return slackMsgBuilder(quote, openDoors)
+    return slackMsgBuilder(quote)
 }
 
 private String[] findOpenDoors() {
@@ -130,7 +132,7 @@ def channelSenderMethod() {
     }
 }
 
-def handlerMethod() {
+def openDoorCheckMethod() {
     String[] openDoors = findOpenDoors()
     if (timeOfDayIsBetween(normalTime, endTime, new Date(), location.timeZone)) {
         log.debug "Time is right"
