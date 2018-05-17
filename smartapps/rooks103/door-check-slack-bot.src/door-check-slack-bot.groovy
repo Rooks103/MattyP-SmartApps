@@ -20,12 +20,14 @@ definition (
 
 preferences {
     page(name: "App Configuration", title: "Setup", install: true, uninstall: true) {
-        section("Choose one or more, when...") {
+        section("Sensor Configuration") {
             input "officeDoors", "capability.contactSensor", title: "Doors that will be monitored.", required: true, multiple: true
-            input "startTime", "time", title: "Start sending messages", required: true
-            input "hereTime", "time", title: "Switch to Here Messages", required: true
-            input "channelTime", "time", title: "Switch to channel messages", required: true
-        	input "endTime", "time", title: "Turn off messages", required: true
+        }
+        section("Time Configuration") {  
+            input "normalTime", "time", title: "Normal Time", required: true, description: "When a standard slack message will be sent"
+            input "hereTime", "time", title: "Here Time", required: true, description: "When a @here slack message will be sent"
+            input "channelTime", "time", title: "Channel Time", required: true, description: "When a @channel slack message will be sent"
+            input "endTime", "time", title: "Stop Time", required: true, description: "When to stop checking if doors are open"
         }
         section("Slack Configuration") {
             input "slackURI", "text", title: "Slack Instance", required: true, description: "URI for Slack Instacne e.g. smartthings.slack.com"
@@ -49,10 +51,15 @@ def updated() {
 }
 
 def initialize() {
-    schedule("0 0/20 * ? * MON-FRI", handlerMethod)
+    state.wereDoorsOpenPreviously = false
+    schedule("0 0/2 * ? * MON-FRI", handlerMethod)
+    schedule(normalTime, normalSenderMethod)
+    schedule(hereTime, hereSenderMethod)
+    schedule(channelTime, channelSenderMethod)
 }
 
-private Map paramsBuilder(msg) {
+private Map slackMsgBuilder(message, openDoors) {
+	log.debug "Entering slack message builder."
     Map slackParams = [
         uri: "https://$slackURI/api/chat.postMessage",
         headers: [
@@ -60,36 +67,91 @@ private Map paramsBuilder(msg) {
         ],
         body: [
             channel: "$slackChannel",
-            text: "$msg",
-            icon_emoji: ":coffee:",
+            text: "$message",
+            icon_emoji: ":bender2:",
             as_user: true
         ]
     ]
     return slackParams
 }
 
-def handlerMethod() {
-    def openDoors = officeDoors.findAll { doorVal ->
-        doorVal.currentContact == "open" ? true : false
+private Map messagePicker(msgType, openDoors) {
+	log.debug "Entering message picker."
+    Random rand = new Random()
+    String[] openQuotes = ["Hey! My sensors indicate open doors. One of you meatbags go close them. I'm busy doing nothing.",
+              "For real. Someone go close the doors. The draft from them is messing with my cigars.",
+              "I know you silly humans aren't as cool as me, and it makes you sad, but seriously. Close the doors!",
+              "I don't remember closing the door, because I didn't. Someone else go close them.",
+              "You are going to be so sorry when I envoke the wrath of Hann on you meatbags. Go forth and close... or else.",
+              "If you think I'm going to close these, you can bite my shiny metal... well you know.",
+              "Might be time for a Bender bender with the kitchen booze. Better close the doors or it's mine.",
+              "You think I'm going to close the doors? Hahahahaha... oh wait, you're serious? Let me laugh even harder."]
+    String[] closeQuotes = ["Looks like you closed the doors. Good work. What? You thought there was a prize? Hahaha...",
+              "Hey, I'm impressed. You folks actually followed directions. Good humans.",
+              "Wow! The doors are now closed! Beer for everyone, you can buy."]
+    String quote = ""
+    if (msgType == 'channel') {
+        quote = "<!channel|channel> " + openQuotes[rand.nextInt(openQuotes.length)] + "\n*Open Doors:* ${openDoors}"
+    } else if (msgType == 'here') {
+        quote = "<!here|here> " + openQuotes[rand.nextInt(openQuotes.length)] + "\n*Open Doors:* ${openDoors}"
+    } else if (msgType == "normal") {
+        quote = openQuotes[rand.nextInt(openQuotes.length)] + "\n*Open Doors:* ${openDoors}"
+    } else if (msgType == "closed") {
+        quote = closeQuotes[rand.nextInt(closeQuotes.length)]
     }
-    log.debug "${openDoors} -- ${openDoors.size()}"
-    
-    if (openDoors.size() != 0) {
-        if (timeOfDayIsBetween(startTime, hereTime, new Date(), location.timeZone)) {
-            log.debug "Normal message"
-            asynchttp_v1.post(processResponse, paramsBuilder("Looks like some doors are open: ${openDoors}. We should probably close them now."))
-        } else if (timeOfDayIsBetween(hereTime, channelTime, new Date(), location.timeZone)) {
-            log.debug "Here message"
-            asynchttp_v1.post(processResponse, paramsBuilder("<!here|here> These doors are open: ${openDoors}. If someone could please go close them, it would be much appreciated."))
-        } else if (timeOfDayIsBetween(channelTime, endTime, new Date(), location.timeZone)) {
-            log.debug "Channel message"
-            asynchttp_v1.post(processResponse, paramsBuilder("<!channel|channel> For real. Someone go close these doors: ${openDoors}. Let's not invoke the wrath of Hann."))
-        } else {
-            log.debug "Shouldn't be here!"
-        }
-    } 
+    return slackMsgBuilder(quote, openDoors)
 }
 
-def processResponse(response, data) {
-    
+private String[] findOpenDoors() {
+    String[] openDoors = officeDoors.findAll { doorVal ->
+        doorVal.currentContact == "open" ? true : false
+    }
+    return openDoors
+}
+
+def normalSenderMethod() {
+    log.debug "Normal message"
+    if (findOpenDoors().size() != 0) {
+        asynchttp_v1.post(processResponse, messagePicker("normal", "${findOpenDoors()}"))
+    }
+}
+
+def hereSenderMethod() {
+    log.debug "Here message"
+    if (findOpenDoors().size() != 0) {
+        asynchttp_v1.post(processResponse, messagePicker("here", "${findOpenDoors()}"))
+    }
+}
+
+def channelSenderMethod() {
+    log.debug "Channel message"
+    if (findOpenDoors().size() != 0) {
+        asynchttp_v1.post(processResponse, messagePicker("channel", "${findOpenDoors()}"))
+    }
+}
+
+def handlerMethod() {
+    String[] openDoors = findOpenDoors()
+    if (timeOfDayIsBetween(normalTime, endTime, new Date(), location.timeZone)) {
+        log.debug "Time is right"
+        if (openDoors.size() != 0) {
+            log.debug "Doors are open"
+            state.wereDoorsOpenPreviously = true
+        } else {
+            log.debug "No open doors."
+            if (state.wereDoorsOpenPreviously) {
+                log.debug "Sending door closure."
+                asynchttp_v1.post(processResponse, messagePicker("closed", "${findOpenDoors()}"))
+                state.wereDoorsOpenPreviously = false
+            }
+        }
+    }
+    else {
+        log.debug "Outside the specified timeframe for sending messages."
+        state.wereDoorsOpenPreviously = false
+    }
+}
+
+private void processResponse(response, data) {
+    log.debug "Response Handler"
 }
