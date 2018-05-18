@@ -54,6 +54,7 @@ def updated() {
 
 def initialize() {
     state.wereDoorsOpenPreviously = false
+    state.hasCloseMessageBeenSent = true
     schedule("0 0/2 * ? * MON-FRI", openDoorCheckMethod)
     schedule(normalTime, normalSenderMethod)
     schedule(hereTime, hereSenderMethod)
@@ -114,6 +115,7 @@ private String[] findOpenDoors() {
 def normalSenderMethod() {
     log.debug "Normal message"
     if (findOpenDoors().size() != 0) {
+    	state.hasCloseMessageBeenSent = false
         asynchttp_v1.post(processResponse, messagePicker("normal", "${findOpenDoors()}"))
     }
 }
@@ -141,10 +143,11 @@ def openDoorCheckMethod() {
             state.wereDoorsOpenPreviously = true
         } else {
             log.debug "No open doors."
-            if (state.wereDoorsOpenPreviously) {
+            log.debug "${state.wereDoorsOpenPreviously} || ${state.hasCloseMessageBeenSent}"
+            if (state.wereDoorsOpenPreviously && !state.hasCloseMessageBeenSent) {
                 log.debug "Sending door closure."
                 asynchttp_v1.post(processResponse, messagePicker("closed", "${findOpenDoors()}"))
-                state.wereDoorsOpenPreviously = false
+                state.hasCloseMessageBeenSent = true
             }
         }
     }
